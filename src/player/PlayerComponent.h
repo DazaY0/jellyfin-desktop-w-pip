@@ -17,7 +17,11 @@
 #include <mpv/client.h>
 
 class MpvController;
+class MpvVideoItem;
 class AlbumArtProvider;
+#ifdef Q_OS_MAC
+class MacPiPController;
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 class PlayerComponent : public ComponentBase
@@ -131,6 +135,17 @@ public:
   // True while the video output is up (stays true while paused).
   Q_INVOKABLE bool isVideoWindowVisible() const { qInfo() << m_windowVisible; return m_windowVisible; }
 
+  // Picture-in-Picture support
+  Q_INVOKABLE bool isPictureInPictureSupported() const;
+  Q_INVOKABLE bool isPictureInPictureEnabled() const;
+  Q_INVOKABLE void setPictureInPictureEnabled(bool enabled);
+  Q_INVOKABLE void togglePictureInPicture();
+
+  bool isMainWindowVisibleForPip() const;
+  QSize pipTargetSize() const;
+  void renderPipFrame(unsigned int fbo, int width, int height);
+  void requestPipFrame();
+
   QRect videoRectangle() { return m_videoRectangle; }
 
   AlbumArtProvider* albumArtProvider() const { return m_albumArtProvider; }
@@ -228,6 +243,9 @@ Q_SIGNALS:
   // Buffered ranges from demuxer-cache-state, as list of {start, end} in ticks
   void bufferedRangesUpdated(const QVariantList& ranges);
 
+  // Picture-in-Picture state changes
+  void pictureInPictureChanged(bool enabled);
+
 private:
   // this is the function actually implemented in the backends. the variantmap contains
   // a few known keys:
@@ -285,6 +303,11 @@ private:
   QVariantList m_queuedItems;
 
   AlbumArtProvider* m_albumArtProvider;
+  MpvVideoItem* m_videoItem = nullptr;
+#ifdef Q_OS_MAC
+  MacPiPController* m_macPip = nullptr;
+  QTimer m_pipAutoCloseTimer;
+#endif
 };
 
 #endif // PLAYERCOMPONENT_H

@@ -122,6 +122,18 @@
              * @type {Array<{start: number, end: number}>}
              */
             this._bufferedRanges = [];
+            /**
+             * @type {boolean}
+             */
+            this._isPip = false;
+
+            /**
+             * @private
+             */
+            this.onPictureInPictureChanged = (enabled) => {
+                this._isPip = Boolean(enabled);
+                this.events.trigger(this, 'pictureinpicturechange');
+            };
 
             /**
              * @private
@@ -500,6 +512,10 @@
             this.removeMediaDialog();
 
             const player = window.api.player;
+            if (this._isPip && player.setPictureInPictureEnabled) {
+                player.setPictureInPictureEnabled(false);
+                this._isPip = false;
+            }
             this._hasConnection = false;
             this._bufferedRanges = [];
             player.playing.disconnect(this.onPlaying);
@@ -510,6 +526,9 @@
             player.error.disconnect(this.onError);
             player.paused.disconnect(this.onPause);
             player.bufferedRangesUpdated.disconnect(this.onBufferedRangesUpdated);
+            if (player.pictureInPictureChanged) {
+                player.pictureInPictureChanged.disconnect(this.onPictureInPictureChanged);
+            }
         }
 
         /**
@@ -558,6 +577,9 @@
                     player.error.connect(this.onError);
                     player.paused.connect(this.onPause);
                     player.bufferedRangesUpdated.connect(this.onBufferedRangesUpdated);
+                    if (player.pictureInPictureChanged) {
+                        player.pictureInPictureChanged.connect(this.onPictureInPictureChanged);
+                    }
 
                     // Log all other signals
                     player.buffering.connect((percent) => {
@@ -621,7 +643,12 @@
      * @private
      */
     static getSupportedFeatures() {
-        return ['PlaybackRate', 'SetAspectRatio'];
+        const features = ['PlaybackRate', 'SetAspectRatio'];
+        const isMac = navigator.platform?.toLowerCase().includes('mac') || navigator.userAgent?.includes('Macintosh');
+        if (isMac) {
+            features.push('PictureInPicture');
+        }
+        return features;
     }
 
     supports(feature) {
@@ -678,10 +705,14 @@
         console.error(`Picture in picture error: ${err}`);
     }
 
-    setPictureInPictureEnabled() {}
+    setPictureInPictureEnabled(isEnabled) {
+        if (window.api && window.api.player && window.api.player.setPictureInPictureEnabled) {
+            window.api.player.setPictureInPictureEnabled(Boolean(isEnabled));
+        }
+    }
 
     isPictureInPictureEnabled() {
-        return false;
+        return Boolean(this._isPip);
     }
 
     isAirPlayEnabled() {
@@ -822,6 +853,7 @@
     }
 
     togglePictureInPicture() {
+        this.setPictureInPictureEnabled(!this.isPictureInPictureEnabled());
     }
 
     toggleAirPlay() {

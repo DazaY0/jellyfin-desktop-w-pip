@@ -143,6 +143,13 @@ Window
 
   Action
   {
+    shortcut: "Ctrl+Alt+P"
+    enabled: mainWindow.webDesktopMode && components.system.isMacos
+    onTriggered: components.player.togglePictureInPicture()
+  }
+
+  Action
+  {
     shortcut: StandardKey.Copy
     onTriggered: runWebAction(WebEngineView.Copy)
     id: action_copy

@@ -18,6 +18,10 @@
 #include "input/InputComponent.h"
 #include <MpvController>
 
+#ifdef Q_OS_MAC
+#include "osx/MacPiPController.h"
+#endif
+
 #include <math.h>
 #include <string.h>
 #include <shared/Paths.h>
@@ -65,12 +69,26 @@ PlayerComponent::PlayerComponent(QObject* parent)
 
   m_reloadAudioTimer.setSingleShot(true);
   connect(&m_reloadAudioTimer, &QTimer::timeout, this, &PlayerComponent::updateAudioDevice);
+
+#ifdef Q_OS_MAC
+  m_macPip = new MacPiPController(this);
+  connect(m_macPip, &MacPiPController::pictureInPictureChanged,
+          this, &PlayerComponent::pictureInPictureChanged);
+
+  m_pipAutoCloseTimer.setSingleShot(true);
+  connect(&m_pipAutoCloseTimer, &QTimer::timeout, this, [this]() {
+    if (!m_inPlayback && m_macPip && m_macPip->isActive())
+      m_macPip->setPictureInPictureEnabled(false);
+  });
+#endif
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 void PlayerComponent::componentPostInitialize()
 {
   InputComponent::Get().registerHostCommand("player", this, "userCommand");
+  InputComponent::Get().registerHostCommand("togglePiP", this, "togglePictureInPicture");
+  InputComponent::Get().registerHostCommand("pip", this, "togglePictureInPicture");
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -252,6 +270,7 @@ void PlayerComponent::setQtQuickWindow(QQuickWindow* window)
   }
 
   qDebug() << "Found MpvVideoItem, calling setPlayerComponent";
+  m_videoItem = video;
   video->setPlayerComponent(this);
 }
 
@@ -266,6 +285,10 @@ void PlayerComponent::setWindow(QQuickWindow* window)
 #endif
 
   m_window = window;
+#ifdef Q_OS_MAC
+  if (m_macPip)
+    m_macPip->setWindow(window);
+#endif
   if (!window)
     return;
 
@@ -483,6 +506,21 @@ void PlayerComponent::updatePlaybackState()
     }
     emit stateChanged(newState, m_state);
     m_state = newState;
+
+#ifdef Q_OS_MAC
+    if (m_macPip)
+    {
+      m_macPip->setPlaying(m_state == State::playing);
+      if (m_state == State::playing || m_state == State::paused || m_state == State::buffering)
+      {
+        m_pipAutoCloseTimer.stop();
+      }
+      else if (m_macPip->isActive() && !m_streamSwitchImminent)
+      {
+        m_pipAutoCloseTimer.start(500);
+      }
+    }
+#endif
   }
 
   if (m_state == State::buffering && m_lastBufferingPercentage != m_bufferingPercentage)
@@ -787,6 +825,10 @@ void PlayerComponent::notifyQueueChange(bool canNext, bool canPrevious)
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 void PlayerComponent::notifyPlaybackStop(bool isNavigating)
 {
+#ifdef Q_OS_MAC
+  if (!isNavigating && m_macPip && m_macPip->isActive())
+    m_macPip->setPictureInPictureEnabled(false);
+#endif
   emit playbackStopped(isNavigating);
 }
 
@@ -1382,6 +1424,27 @@ void PlayerComponent::setSubtitleConfiguration()
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 void PlayerComponent::updateVideoAspectSettings()
 {
+  if (m_mpv)
+  {
+    auto params = m_mpv->getProperty("video-dec-params").toMap();
+    int dw = params["dw"].toInt();
+    int dh = params["dh"].toInt();
+    if (dw <= 0 || dh <= 0)
+    {
+      dw = params["w"].toInt();
+      dh = params["h"].toInt();
+    }
+    if (dw > 0 && dh > 0)
+    {
+      if (m_videoItem)
+        m_videoItem->setVideoSize(QSize(dw, dh));
+#ifdef Q_OS_MAC
+      if (m_macPip)
+        m_macPip->setVideoSize(dw, dh);
+#endif
+    }
+  }
+
   QVariant mode = SettingsComponent::Get().value(SETTINGS_SECTION_VIDEO, "aspect").toString();
   bool disableScaling = false;
   bool keepAspect = true;
@@ -1651,4 +1714,86 @@ QVariantList PlayerComponent::getWebPlaylist() const
 QString PlayerComponent::getCurrentWebPlaylistItemId() const
 {
   return m_currentWebPlaylistItemId;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+bool PlayerComponent::isPictureInPictureSupported() const
+{
+#ifdef Q_OS_MAC
+  return m_macPip ? m_macPip->isSupported() : false;
+#else
+  return false;
+#endif
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+bool PlayerComponent::isPictureInPictureEnabled() const
+{
+#ifdef Q_OS_MAC
+  return m_macPip ? m_macPip->isActive() : false;
+#else
+  return false;
+#endif
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+void PlayerComponent::setPictureInPictureEnabled(bool enabled)
+{
+#ifdef Q_OS_MAC
+  if (!m_macPip)
+    return;
+
+  if (enabled && !m_windowVisible && !m_inPlayback)
+    return;
+
+  m_macPip->setPictureInPictureEnabled(enabled);
+#else
+  Q_UNUSED(enabled);
+#endif
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+void PlayerComponent::togglePictureInPicture()
+{
+  setPictureInPictureEnabled(!isPictureInPictureEnabled());
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+bool PlayerComponent::isMainWindowVisibleForPip() const
+{
+#ifdef Q_OS_MAC
+  return m_macPip ? m_macPip->isMainWindowVisibleOnScreen() : true;
+#else
+  return true;
+#endif
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+QSize PlayerComponent::pipTargetSize() const
+{
+#ifdef Q_OS_MAC
+  return m_macPip ? m_macPip->pipTargetSize() : QSize(1280, 720);
+#else
+  return QSize(1280, 720);
+#endif
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+void PlayerComponent::renderPipFrame(unsigned int fbo, int width, int height)
+{
+#ifdef Q_OS_MAC
+  if (m_macPip)
+    m_macPip->renderFrameFromFbo(fbo, width, height);
+#else
+  Q_UNUSED(fbo);
+  Q_UNUSED(width);
+  Q_UNUSED(height);
+#endif
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+void PlayerComponent::requestPipFrame()
+{
+  if (m_videoItem)
+    m_videoItem->requestPipFrame();
 }
